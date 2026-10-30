@@ -13,22 +13,18 @@
 
 ## Features
 
-- **Play retro games right on the home screen**, in a pop-up over your tiles. No app to open, no "closing" screen
+- **Play retro games right on the home screen**, in a pop-up over your tiles. No app to open.
 - **12 consoles** in one payload: PlayStation, Nintendo 64, Nintendo DS, GBA, SNES, NES, Game Boy / Color, Game Gear, PC Engine, WonderSwan, DOS
 - **JIT** for PlayStation, N64, DS and DOS: full speed on the PS5's CPU
-- **PlayStation at 2x resolution**, memory cards per game (shared by its discs)
-- **Fullscreen** with the touchpad, or the pop-up with a frame around the game
-- **Sound** played through the home screen
+- **Fullscreen** with the touchpad.
 - **Hold R3** anywhere to open the menu: the game pauses, R3 again goes back to it
-- **Zip and 7z** games for the cartridge consoles
-- **Loading spinner** with the game's name while big games load
 
 ## Install
 
-Needs a jailbroken PS5 with kstuff and a payload loader.
+Needs a jailbroken PS5 with a payload loader.
 
 1. Put your games in `/data/PlayShell/roms/<console>` (the folders are made on the first start).
-2. Load `playshell.elf`. A notification says **PlayShell is active**.
+2. Load `playshell.elf`.
 3. **Hold R3** on the home screen, pick a console, pick a game.
 
 ## Consoles
