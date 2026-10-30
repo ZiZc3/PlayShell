@@ -69,7 +69,7 @@ Needs a jailbroken PS5 with a payload loader.
 
 ## Credits
 
-PlayShell is built on these emulators (all open source):
+PlayShell is built on these emulators:
 
 - **[Mesen 2](https://github.com/SourMesen/Mesen2)**: NES, SNES, GBA, Game Gear, PC Engine, WonderSwan (GPL-3.0)
 - **[PCSX-ReARMed](https://github.com/libretro/pcsx_rearmed)**: PlayStation (GPL-2.0)
