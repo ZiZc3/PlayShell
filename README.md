@@ -22,8 +22,8 @@
 
 Needs a jailbroken PS5 with a payload loader.
 
-1. Put your games in `/data/PlayShell/roms/<console>` (the folders are made on the first start).
-2. Load `playshell.elf`.
+1. Load `playshell.elf`. 
+2. Put your games in `/data/PlayShell/roms/<console>` (the folders are made on the first start).
 3. **Hold R3** on the home screen, pick a console, pick a game.
 
 ## Consoles
