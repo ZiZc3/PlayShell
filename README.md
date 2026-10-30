@@ -7,7 +7,6 @@
 <p align="center"><b>Emulators inside the PS5 home screen.</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1-white?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/platform-PS5-white?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/consoles-12-white?style=flat-square" alt="consoles">
   <img src="https://img.shields.io/badge/license-GPL--3.0-white?style=flat-square" alt="license">
