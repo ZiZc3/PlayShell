@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.png" width="140" alt="PlayShell">
+</p>
+
 <h1 align="center">PlayShell</h1>
 
 <p align="center"><b>Emulators inside the PS5 home screen.</b></p>
