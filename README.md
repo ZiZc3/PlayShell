@@ -17,7 +17,6 @@
 - **12 consoles** in one payload: PlayStation, Nintendo 64, Nintendo DS, GBA, SNES, NES, Game Boy / Color, Game Gear, PC Engine, WonderSwan, DOS
 - **JIT** for PlayStation, N64, DS and DOS: full speed on the PS5's CPU
 - **Fullscreen** with the touchpad.
-- **Hold R3** anywhere to open the menu: the game pauses, R3 again goes back to it
 
 ## Install
 
