@@ -17,8 +17,8 @@
 ## Features
 
 - **Play retro games right on the home screen**, in a pop-up over your tiles. No app to open.
-- **12 consoles** in one payload: PlayStation, Nintendo 64, Nintendo DS, GBA, SNES, NES, Game Boy / Color, Game Gear, PC Engine, WonderSwan, DOS
-- **JIT** for PlayStation, N64, DS and DOS: full speed on the PS5's CPU
+- **10 consoles** in one payload: PlayStation, GBA, SNES, NES, Game Boy / Color, Game Gear, PC Engine, WonderSwan, DOS
+- **JIT** for PlayStation and DOS: full speed on the PS5's CPU
 - **Fullscreen** with the touchpad.
 
 ## Install
@@ -34,8 +34,6 @@ Needs a jailbroken PS5 with a payload loader.
 | Console | Folder | Files | BIOS (`/data/PlayShell/bios`) |
 |---|---|---|---|
 | PlayStation | `ps1` | `.cue` `.chd` `.pbp` `.iso` `.m3u` | `SCPH1001.BIN` recommended |
-| Nintendo 64 | `n64` | `.z64` `.n64` `.v64` | - |
-| Nintendo DS | `nds` | `.nds` | optional (`bios7.bin`, `bios9.bin`, `firmware.bin`) |
 | Game Boy Advance | `gba` | `.gba` | `gba_bios.bin` |
 | SNES | `snes` | `.sfc` `.smc` | - |
 | NES | `nes` | `.nes` | - |
@@ -54,7 +52,6 @@ Needs a jailbroken PS5 with a payload loader.
 | ○ | Back / close |
 | L1 / R1 | Jump to the previous / next letter in the game list |
 | Touchpad | Fullscreen on / off |
-| R2 + right stick | Touch screen (Nintendo DS) |
 
 ## Folders on the PS5
 
@@ -72,8 +69,6 @@ PlayShell is built on these emulators:
 
 - **[Mesen 2](https://github.com/SourMesen/Mesen2)**: NES, SNES, GBA, Game Gear, PC Engine, WonderSwan (GPL-3.0)
 - **[PCSX-ReARMed](https://github.com/libretro/pcsx_rearmed)**: PlayStation (GPL-2.0)
-- **[melonDS](https://github.com/libretro/melonDS)**: Nintendo DS (GPL-3.0)
-- **[Mupen64Plus-Next](https://github.com/libretro/mupen64plus-libretro-nx)**: Nintendo 64 (GPL-2.0)
 - **[DOSBox Pure](https://github.com/schellingb/dosbox-pure)**: DOS (GPL-2.0)
 - **Walnut-CGB** ([Mr-PauI](https://github.com/Mr-PauI)), based on **[Peanut-GB](https://github.com/deltabeard/Peanut-GB)**, with **minigb_apu** (from [MiniGBS](https://github.com/baines/MiniGBS)): Game Boy / Color (MIT)
 - **[OnionHEN](https://github.com/aydencharles/onionHEN/)**: payload injector, detour library and ShellUI groundwork
