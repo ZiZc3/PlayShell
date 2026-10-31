@@ -132,6 +132,7 @@ void*  (*mono_object_unbox)(Obj obj);
 Obj    (*mono_object_to_string)(Obj obj, Obj* exc);
 char*  (*mono_string_to_utf8)(Obj str);
 uint32_t (*mono_gchandle_new)(Obj obj, int pinned);
+void     (*mono_gchandle_free)(uint32_t gchandle);
 Obj    (*mono_method_desc_new)(const char* name, int include_namespace);
 Obj    (*mono_method_desc_search_in_class)(Obj desc, Obj klass);
 void   (*mono_method_desc_free)(Obj desc);
@@ -249,6 +250,7 @@ bool resolve_mono() {
 		RESOLVE(mono_object_to_string);
 		RESOLVE(mono_string_to_utf8);
 		RESOLVE(mono_gchandle_new);
+		RESOLVE(mono_gchandle_free);
 		RESOLVE(mono_method_desc_new);
 		RESOLVE(mono_method_desc_search_in_class);
 		RESOLVE(mono_method_desc_free);
@@ -464,13 +466,19 @@ constexpr int kRw = 160, kRh = 144;
 struct PicSet {
 	int w = 0, h = 0, n = 0;
 	Obj pic[2] {}, asset[2] {}, arr = nullptr;
+	uint32_t gh[5] = {}; int ghn = 0; // pinned handles, freed when the slot is recycled
+	int last = 0;                     // g_tick when last used (least-recently-used eviction)
 };
-PicSet  g_sets[6];
+static const int PICSET_CAP = 8;
+PicSet  g_sets[PICSET_CAP];
 int     g_nsets = 0;
 PicSet* g_set   = nullptr;
 Obj     g_tk = nullptr, g_ak = nullptr, g_tctr = nullptr, g_actr = nullptr;
 Obj     g_bezel = nullptr; // the pop-up's bezel (its picture and size follow the console)
+Obj     g_backing = nullptr; // opaque rounded frame base behind the bezel + game: the home screen never shows through, any size
 bool    g_await = false;   // a game was started: its picture and bezel wait for its first frame
+int     g_await_tick = 0;  // g_tick when loading started (a watchdog stops the spinner if no frame comes)
+bool    g_await_warned = false;
 Obj     g_black = nullptr; // fullscreen: black over the whole home screen, under the game
 Obj     g_spin  = nullptr; // the loading spinner: from picking a game to its first frame (big games load for a while)
 Obj     g_spin_class = nullptr; // it is the PS5's own BusyIndicator (it turns by itself, as in the system's menus: our
@@ -790,22 +798,45 @@ void joy_send(char kind, uint8_t value) {
 
 PadData GetData_Hook(int device) {
 	PadData d = g_getdata_orig(device);
+	// The system takes the controller (Skip) when it handles input itself - e.g. a controller just reconnected
+	// and the PS5 shows the "who is using this controller" chooser. If PlayShell keeps the home screen input
+	// suspended through that, the dialog cannot be used and the only way out is a restart. So yield: drop to the
+	// home screen (home_input_tick ResumeInputEvents next frame) and stop the game.
+	static int skip_run = 0;
+	if (d.Skip) {
+		if (skip_run < 100000) ++skip_run;
+		if (skip_run == 15) wp_log("retro: controller Skip (system has the controller)");
+		if (skip_run >= 15 && g_mode.load() != 0) {
+			g_mode.store(0);
+			g_game_mode = false;
+			joy_send('X', 0);
+			wp_log("retro: released to the home screen (system controller dialog)");
+		}
+		return d;
+	}
+	skip_run = 0;
 	if (d.Buttons & 0x8000u) { // R3 held
 		const long t = now_ms();
 		if (g_r3_since == 0) {
 			g_r3_since = t;
 		} else if (!g_r3_done && t - g_r3_since >= 500) {
 			g_r3_done   = true;
-			const int m = g_mode.load();
-			// home -> menu, menu -> home, playing -> menu (the game pauses)
-			g_mode.store(m == 1 ? 0 : 1);
+			const int m  = g_mode.load();
+			// home -> menu, menu -> home, playing -> menu. Going all the way to the home screen STOPS the game
+			// (unloads it) so a heavy core's threads do not keep slowing the home screen; the menu only pauses it.
+			const int nm = (m == 1 ? 0 : 1);
+			g_mode.store(nm);
 			g_game_mode = false;
-			joy_send('M', 0);
+			if (nm == 0) {
+				joy_send('X', 0); // closed to the home screen: stop and unload the game
+			} else {
+				joy_send('M', 0); // to the menu: the game pauses
+			}
 			joy_send('J', 0xFF);
 			if (m == 0) {
 				joy_send('Q', 0);
 			}
-			wp_log("retro: %s", m == 1 ? "menu closed" : "PlayShell menu");
+			wp_log("retro: %s", m == 1 ? "menu closed - game stopped" : "PlayShell menu");
 		}
 	} else {
 		g_r3_since = 0;
@@ -1000,6 +1031,15 @@ void retro_popup_setup(Obj pui, Obj asset, Obj wk) {
 	if ((g_black = panel(box, wk, 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f, 0.0f)) != nullptr) { // fullscreen's black
 		bool off = false;
 		prop_set_up(g_black, "Visible", &off);
+	}
+	{ // the frame base: an opaque rounded panel the exact size of the bezel (place_game sizes it to each game).
+	  // It sits under both the bezel and the game, so no matter the game's resolution the home screen can never
+	  // show through - and for a size with no exact bezel (many PS1/DOS modes) this panel IS the frame.
+		g_backing = panel(box, wk, 420.0f, 48.0f, 1080.0f, 984.0f, 0.13f, 1.0f, 38.0f);
+		if (g_backing != nullptr) {
+			bool off = false;
+			prop_set_up(g_backing, "Visible", &off);
+		}
 	}
 	{ // the bezel: a retro frame around the screen (built-in picture, half size, shown 2x)
 		Obj bz = bk != nullptr ? mono_object_new(g_domain, bk) : nullptr;
@@ -1261,9 +1301,9 @@ const char* const kConName[kCons] = {"Game Boy", "Game Boy Color", "NES", "Game 
 const char* const kConIcon[kCons] = {"console_gb", "console_gbc", "console_nes", "console_gg", "console_ps1", "console_snes", "console_gba", "console_psp",
                                      "console_nds", "console_dos", "console_n64", "console_pce", "console_ws", "console_3ds"};
 #if PLAYSHELL_3DS
-const int         kConOrder[] = {4, 10, 13, 8, 6, 5, 2, 11, 1, 0, 3, 12, 9};
+const int         kConOrder[] = {4, 13, 6, 5, 2, 11, 1, 0, 3, 12, 9};
 #else
-const int         kConOrder[] = {4, 10, 8, 6, 5, 2, 11, 1, 0, 3, 12, 9}; // (13 Nintendo 3DS: off - tools/azahar_lib.sh)
+const int         kConOrder[] = {4, 6, 5, 2, 11, 1, 0, 3, 12, 9}; // (0.1: N64 id 10 + DS id 8 disabled - crash/bezel; 13 Nintendo 3DS: off - tools/azahar_lib.sh)
 #endif // the order shown (console ids): PlayStation, N64, DS first
 constexpr int     kShown      = sizeof(kConOrder) / sizeof(kConOrder[0]); // consoles in the menu (PSP's id 7: removed)
 constexpr int kCols = 6, kTileRows = 3, kTiles = kCols * kTileRows; // console tiles on page 1 (more: it scrolls)
@@ -1622,7 +1662,8 @@ void retro_menu_tick() {
 		if (keys & 8) { if (g_con < kShown - 1) ++g_con; redo = true; }
 		if (keys & 1) { if (g_con >= kCols) g_con -= kCols; redo = true; }
 		if (keys & 2) { if (g_con + kCols < kShown) g_con += kCols; else if (g_con / kCols < (kShown - 1) / kCols) g_con = kShown - 1; redo = true; }
-		if (keys & 32) {
+		if (keys & 32) { // Circle: close to the home screen -> stop the game (any console), like R3 does
+			joy_send('X', 0);
 			g_mode.store(0);
 			return;
 		}
@@ -1713,12 +1754,17 @@ void play_game(int id, bool resume) {
 		g_q_n = 0;
 		pthread_mutex_unlock(&g_q_lock);
 		g_await = true;
+		g_await_tick = g_tick;   // start the load watchdog
+		g_await_warned = false;
 		bool off = false;
 		if (g_pop_img != nullptr) {
 			prop_set_up(g_pop_img, "Visible", &off);
 		}
 		if (g_bezel != nullptr) {
 			prop_set_up(g_bezel, "Visible", &off);
+		}
+		if (g_backing != nullptr) {
+			prop_set_up(g_backing, "Visible", &off);
 		}
 		wp_log("retro: play %s%s", g_gl_name[id], resume ? " (continue)" : "");
 		snprintf(g_loading, sizeof(g_loading), "%s", g_gl_name[id]);
@@ -1735,9 +1781,17 @@ void retro_popup_tick(bool playing) {
 		g_card_until = 0;
 		show_on_home(g_card, false);
 	}
+	// load watchdog: if no first frame comes after ~20 s (1200 UI frames), stop the spinner so it is not "forever"
+	// and warn once; g_await stays set, so a late frame still clears it normally, and holding R3 goes back (stops it).
+	const bool timed_out = g_await && g_await_tick != 0 && (g_tick - g_await_tick > 1200);
+	if (timed_out && !g_await_warned) {
+		g_await_warned = true;
+		wp_log("retro: load watchdog - no frame after ~20s for '%s'", g_loading);
+		notify("Taking too long to start - hold R3 to go back");
+	}
 	if (g_spin != nullptr) { // loading: the spinner turns until the game's first frame
 		static bool spin_on = false;
-		const bool  want    = g_await && playing;
+		const bool  want    = g_await && playing && !timed_out;
 		if (want != spin_on) { // shown and turning while loading; stopped and hidden at the game's first frame
 			spin_on = want;
 			prop_set_up(g_spin, "Visible", &spin_on);
@@ -2038,19 +2092,36 @@ bool retro_setup() {
 PicSet* pic_set(int w, int h) {
 	for (int i = 0; i < g_nsets; ++i) {
 		if (g_sets[i].w == w && g_sets[i].h == h) {
+			g_sets[i].last = g_tick;
 			return &g_sets[i];
 		}
 	}
-	if (g_nsets >= 6 || g_tk == nullptr) {
+	if (g_tk == nullptr) {
 		return nullptr;
+	}
+	// take a free slot, else recycle the least-recently-used one (never the size on screen)
+	int slot;
+	if (g_nsets < PICSET_CAP) {
+		slot = g_nsets++;
+	} else {
+		slot = -1;
+		int oldest = 0x7fffffff;
+		for (int i = 0; i < g_nsets; ++i) {
+			if (&g_sets[i] == g_set) continue;
+			if (g_sets[i].last < oldest) { oldest = g_sets[i].last; slot = i; }
+		}
+		if (slot < 0) return nullptr;
+		for (int j = 0; j < g_sets[slot].ghn; ++j) mono_gchandle_free(g_sets[slot].gh[j]);
+		g_sets[slot] = PicSet();
 	}
 	PicSet set;
 	set.w = w, set.h = h;
 	set.arr = mono_array_new(g_domain, mono_get_byte_class(), static_cast<uintptr_t>(w) * h * 4);
 	if (set.arr == nullptr) {
+		if (slot == g_nsets - 1) --g_nsets;
 		return nullptr;
 	}
-	mono_gchandle_new(set.arr, 1);
+	set.gh[set.ghn++] = mono_gchandle_new(set.arr, 1);
 	int   fmt = 1; // PixelFormat.Rgba
 	bool  no  = false;
 	void* targs[4] = {&w, &h, &no, &fmt};
@@ -2061,8 +2132,8 @@ PicSet* pic_set(int w, int h) {
 		if (a == nullptr || !invoke(g_tctr, t, targs, "Texture2D(size)") || !invoke(g_actr, a, ta, "ImageAsset(size)")) {
 			break;
 		}
-		mono_gchandle_new(t, 1);
-		mono_gchandle_new(a, 1);
+		set.gh[set.ghn++] = mono_gchandle_new(t, 1);
+		set.gh[set.ghn++] = mono_gchandle_new(a, 1);
 		set.pic[i]   = t;
 		set.asset[i] = a;
 		set.n        = i + 1;
@@ -2080,16 +2151,21 @@ PicSet* pic_set(int w, int h) {
 		}
 	}
 	if (set.n == 0) {
+		for (int j = 0; j < set.ghn; ++j) mono_gchandle_free(set.gh[j]);
+		if (slot == g_nsets - 1) --g_nsets;
 		return nullptr;
 	}
+	set.last = g_tick;
 	wp_log("retro: pictures for %d x %d", w, h);
-	g_sets[g_nsets] = set;
-	return &g_sets[g_nsets++];
+	g_sets[slot] = set;
+	return &g_sets[slot];
 }
 
 // The game in the pop-up: as big as fits 1600 x 864, in the middle of the screen - the height decides for the 4:3 and
 // square consoles (PS1 1152 x 864, Game Boy 960 x 864), wide ones get the width (PSP 1536 x 864, GBA 1296 x 864); the
 // bezel made for that screen size around it (tools/make_bezels.py: its 60 px frame, the same fit).
+// The bezel sizes we have (make_bezels.py SIZES). For a resolution with no exact bezel, the closest-shaped one
+// is stretched to fit - so every game gets a frame instead of an empty black border.
 void place_game(int w, int h) {
 	if (g_pop_img == nullptr) {
 		return;
@@ -2109,6 +2185,9 @@ void place_game(int w, int h) {
 		if (g_bezel != nullptr) {
 			prop_set_up(g_bezel, "Visible", &off);
 		}
+		if (g_backing != nullptr) {
+			prop_set_up(g_backing, "Visible", &off);
+		}
 		return;
 	}
 	const float k = std::min(1600.0f / w, 864.0f / h);
@@ -2117,12 +2196,22 @@ void place_game(int w, int h) {
 	prop_set_up(g_pop_img, "Y", &y);
 	prop_set_up(g_pop_img, "Width", &gw);
 	prop_set_up(g_pop_img, "Height", &gh);
+	// The frame base covers the whole bezel rectangle (game + a 60 px border), so whatever the game's size the
+	// home screen never shows through. The textured bezel, when there is an exact one, sits on top of it.
+	float bx = x - 60.0f, by = y - 60.0f, bw = gw + 120.0f, bh = gh + 120.0f;
+	if (g_backing != nullptr) {
+		bool bon = true;
+		prop_set_up(g_backing, "X", &bx);
+		prop_set_up(g_backing, "Y", &by);
+		prop_set_up(g_backing, "Width", &bw);
+		prop_set_up(g_backing, "Height", &bh);
+		prop_set_up(g_backing, "Visible", &bon);
+	}
 	char name[32];
 	snprintf(name, sizeof(name), "bezel_%dx%d", w, h);
-	Obj  pic = g_bezel != nullptr ? pic_asset(name) : nullptr;
-	bool on  = pic != nullptr; // no bezel drawn for this size: none (better than one that does not fit)
+	Obj  pic = g_bezel != nullptr ? pic_asset(name) : nullptr; // only the exact bezel; otherwise the backing is the frame
+	bool on  = pic != nullptr;
 	if (pic != nullptr) {
-		float bx = x - 60.0f, by = y - 60.0f, bw = gw + 120.0f, bh = gh + 120.0f;
 		prop_set_up(g_bezel, "Image", pic);
 		prop_set_up(g_bezel, "X", &bx);
 		prop_set_up(g_bezel, "Y", &by);
@@ -2182,6 +2271,10 @@ void retro_tick() {
 		return; // no new frame from the payload yet
 	}
 	const bool first = g_await; // a game just started: this is its first frame
+	if (first) {
+		wp_log("retro: first frame for '%s' after %d UI frames (~%ds)", g_loading, g_tick - g_await_tick,
+		       (g_tick - g_await_tick) / 60);
+	}
 	static int on = 0, pending = -1;
 	if (g_set == nullptr || fw != g_set->w || fh != g_set->h) { // another console: its own size
 		PicSet* set = fw > 0 && fh > 0 ? pic_set(fw, fh) : nullptr;
@@ -2229,6 +2322,7 @@ void retro_tick() {
 			prop_set_up(g_pop_img, "Visible", &vis);
 			fade_in(g_pop_img, 14);
 			fade_in(g_bezel, 14);
+			fade_in(g_backing, 14);
 		}
 	}
 	clock_gettime(CLOCK_MONOTONIC, &b);

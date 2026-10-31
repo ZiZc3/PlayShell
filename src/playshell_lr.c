@@ -6,8 +6,11 @@
 //                /data/PlayShell/ps1_interpreter: no JIT; /data/PlayShell/ps1_native: no 2x
 //   Nintendo DS: melonDS (GPL-3.0)        games roms/nds (.nds); its own BIOS (FreeBIOS), or real ones in /data/PlayShell/bios
 //                touch screen: the right stick moves the pointer, R2 touches
+//                /data/PlayShell/nds_sidebyside: screens left/right (wide TVs); /data/PlayShell/nds_nojit: no JIT (more compatible)
 //   DOS:         DOSBox Pure (GPL-2.0+)     games roms/dos (.zip, .dosz, .exe, .com, .bat, .iso / .cue)
 //   Nintendo 64: Mupen64Plus-Next (GPL-2.0) games roms/n64 (.z64, .n64, .v64); drawn on the CPU (Angrylion)
+//                /data/PlayShell/n64_full_picture: show the overscan borders (no crop)
+// Per-console toggles are empty files in /data/PlayShell (read when a game loads). A full in-menu Settings page: later.
 // The cores' JITs get runnable memory through the kernel (ps_mmap / ps_mprotect below: the PS5 makes memory runnable
 // only that way). The picture goes to the home screen as RGB565 (PS1 scaled to 4:3), the sound at 48 kHz.
 #include "libretro.h"
@@ -28,6 +31,7 @@
 void ps_send_picture(const uint16_t* px, int w, int h);   // playshell_emu.c
 void ps_send_sound(const int16_t* stereo, unsigned frames); // playshell_emu.c
 void ps_log(const char* line);                              // playshell_emu.c
+void ps_notify(const char* line);                           // playshell_emu.c: a message shown to the user
 void ps_step(const char* step);                             // playshell_daemon.cpp: the crash recorder's step
 
 // ---- runnable memory for the JITs ----
@@ -165,6 +169,7 @@ static const char* ps1_option(const char* key) {
 }
 
 static void ps1_before_load(void);
+
 #if PLAYSHELL_3DS
 // Nintendo 3DS (Azahar): drawn on the CPU (no GPU here), its JIT for the CPU and the shaders, the Original 3DS (less to
 // emulate than the New 3DS), the screens above each other, fast sound
@@ -189,7 +194,7 @@ static const char* n3ds_option(const char* key) {
 // Nintendo DS (melonDS): its JIT, the screens above each other, the touch screen by the right stick (R2 touches)
 static const char* nds_option(const char* key) {
 	if (strcmp(key, "melonds_jit_enable") == 0) {
-		return "enabled";
+		return file_exists("/data/PlayShell/nds_nojit") ? "disabled" : "enabled"; // (slower but more compatible)
 	} else if (strcmp(key, "melonds_jit_fast_memory") == 0) {
 		return "disabled"; // (its memory mirroring trick: not tried on the PS5 yet)
 	} else if (strcmp(key, "melonds_opengl_renderer") == 0) {
@@ -199,7 +204,7 @@ static const char* nds_option(const char* key) {
 	} else if (strcmp(key, "melonds_touch_mode") == 0) {
 		return "Joystick";
 	} else if (strcmp(key, "melonds_screen_layout") == 0) {
-		return "Top/Bottom";
+		return file_exists("/data/PlayShell/nds_sidebyside") ? "Left/Right" : "Top/Bottom"; // side by side for wide TVs
 	} else if (strcmp(key, "melonds_boot_directly") == 0) {
 		return "enabled";
 	} else if (strcmp(key, "melonds_console_mode") == 0) {
@@ -220,19 +225,21 @@ static const char* dos_option(const char* key) {
 	return NULL;
 }
 
-// Nintendo 64 (Mupen64Plus-Next): its dynarec; drawn on the CPU by Angrylion with the low-level RSP it needs (cxd4);
-// Angrylion's threads set (its "all threads" counts CPU cores the PC way: PPSSPP's count said 256 on the PS5)
+// Nintendo 64 (Mupen64Plus-Next): its dynarec; drawn on the CPU by Angrylion with the HLE RSP (cxd4/LLE is not
+// built - selecting it left the RSP plugin NULL and crashed load_game); Angrylion's threads set (its "all threads"
+// counts CPU cores the PC way: PPSSPP's count said 256 on the PS5)
 static const char* n64_option(const char* key) {
 	if (strcmp(key, "mupen64plus-rdp-plugin") == 0) {
 		return "angrylion";
 	} else if (strcmp(key, "mupen64plus-rsp-plugin") == 0) {
-		return "cxd4";
+		return "hle"; // HLE RSP is compiled; cxd4 (LLE) is not (would crash). HLE + Angrylion runs most N64 games.
 	} else if (strcmp(key, "mupen64plus-cpucore") == 0) {
 		return "dynamic_recompiler";
 	} else if (strcmp(key, "mupen64plus-angrylion-multithread") == 0) {
 		return "6";
 	} else if (strcmp(key, "mupen64plus-angrylion-overscan") == 0) {
-		return "enabled"; // the black borders the real N64 drew around its picture (a TV hid them): hidden
+		// the black borders the real N64 drew (a TV hid them): hidden by default; a file shows the full picture
+		return file_exists("/data/PlayShell/n64_full_picture") ? "disabled" : "enabled";
 	}
 	return NULL;
 }
@@ -766,6 +773,20 @@ static void* lr_thread(void* arg) {
 				lr_logf("running %s (%.2f fps, sound %.0f Hz, %dx%d)", path, g_fps, g_rate, av.geometry.base_width, av.geometry.base_height);
 			} else {
 				lr_logf("could not load %s", path);
+				// a clear message for the user, with a BIOS/asset hint for the consoles that may need one
+				const char* base = strrchr(path, '/');
+				base = base != NULL ? base + 1 : path;
+				const char* hint = "";
+				if (strcmp(c->tag, "ps1") == 0) {
+					hint = " - unsupported disc image, or add a PS1 BIOS (scph*.bin) to /data/PlayShell/bios";
+				} else if (strcmp(c->tag, "nds") == 0) {
+					hint = " - the DS may need bios7.bin/bios9.bin/firmware.bin in /data/PlayShell/bios";
+				} else if (strcmp(c->tag, "n64") == 0) {
+					hint = " - unsupported ROM format (try .z64)";
+				}
+				char msg[320];
+				snprintf(msg, sizeof(msg), "Could not start %s%s", base, hint);
+				ps_notify(msg);
 			}
 			next = now_ns();
 		}

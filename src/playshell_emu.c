@@ -386,9 +386,7 @@ static void scan_games(void) {
 	add_games(RETRO_DIR "/ps1");
 	add_games(RETRO_DIR "/snes");
 	add_games(RETRO_DIR "/gba");
-	add_games(RETRO_DIR "/nds");
 	add_games(RETRO_DIR "/dos");
-	add_games(RETRO_DIR "/n64");
 	add_games(RETRO_DIR "/pce");
 	add_games(RETRO_DIR "/ws");
 #if PLAYSHELL_3DS
@@ -647,6 +645,13 @@ void ps_log(const char* line) {
 	}
 }
 
+// A user-visible message from the libretro thread (playshell_lr.c), e.g. a game that would not load.
+void ps_notify(const char* line) {
+	if (g_notify != NULL) {
+		g_notify(line);
+	}
+}
+
 // The game list for the menu: "L<total>\t<loaded>\t<first>\n" + per game "<id>\t<console>\t<name>\n",
 // at most 40 games per packet.
 static void send_list(int s, const struct sockaddr_in* to) {
@@ -730,6 +735,26 @@ static void* retro_thread(void* arg) {
 							send_list(s, &to);
 						}
 					}
+				}
+			} else if (pkt[0] == 'X') { // close the game: save, then UNLOAD so the core and its threads stop (the
+				joypad = 0xFF;          // home screen stays fast); the Continue state is kept so it can resume later
+				ps_mesen_pad(joypad);
+				if (g_cur >= 0) {
+					save_game();
+					if (PLAYSHELL_SAVE_STATES && played) {
+						(void)game_state(1, "auto"); // the Continue state, before unloading
+					}
+					ps_step("close: stop cores");
+					ps_mesen_stop();
+					if (lr_core(g_games[g_cur].console) >= 0) {
+						ps_lr_stop();
+					}
+					g_cur = -1; // nothing loaded: re-picking a game loads it fresh (or Continue)
+				}
+				played  = 0;
+				playing = 0;
+				if (s >= 0) {
+					send_list(s, &to); // the list: no game loaded now
 				}
 			} else if (pkt[0] == 'S' || pkt[0] == 'T') { // the menu: Square saves a state, Triangle loads it (and plays)
 				const int ok = game_state(pkt[0] == 'S' ? 1 : 2, "state");
